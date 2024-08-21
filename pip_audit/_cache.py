@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import os
+import platform
 import subprocess
 import sys
 from pathlib import Path
@@ -28,7 +29,41 @@ _MINIMUM_PIP_VERSION = Version("20.1")
 
 _PIP_VERSION = Version(str(pip_api.PIP_VERSION))
 
-_PIP_AUDIT_INTERNAL_CACHE = Path.home() / ".pip-audit-cache"
+
+def _get_internal_cache_path() -> Path:
+    """
+    Returns the default cache directory path used internally by `pip-audit`.
+
+    It uses the same pip's default paths to select the caching directory.
+    See https://pip.pypa.io/en/latest/topics/caching/#default-paths.
+
+    On macOS, it will be in `$HOME/Library/Caches/pip-audit`.
+
+    On Windows, it will be in `%LOCALAPPDATA%/Cache/pip-audit` and
+    fallback to the `XDG Base Directory Specification` default folder.
+
+    On other OS, it will follow the `XDG Base Directory Specification` and
+    place the cache in either `$HOME/.cache/pip-audit` or respect `$XDG_CACHE_HOME`
+    environment variable i-e `$XDG_CACHE_HOME/pip-audit`.
+    """
+    os_platform = platform.system()
+    default_cache_dir = Path.home() / ".cache" / "pip-audit"
+
+    if os_platform == "Windows":
+        return (
+            default_cache_dir
+            if (local_app_data := os.getenv("LOCALAPPDATA")) is None
+            else Path(local_app_data) / "pip-audit" / "Cache"
+        )
+    elif os_platform == "Darwin":
+        return Path.home() / "Library" / "Caches" / "pip-audit"
+    else:
+        # Follow XDG Base Directory Specification
+        return (
+            default_cache_dir
+            if (xdg_cache_home := os.getenv("XDG_CACHE_HOME")) is None
+            else Path(xdg_cache_home) / "pip-audit"
+        )
 
 
 def _get_pip_cache() -> Path:
@@ -60,6 +95,9 @@ def _get_cache_dir(custom_cache_dir: Path | None, *, use_pip: bool = True) -> Pa
     if custom_cache_dir is not None:
         return custom_cache_dir
 
+    # Retrieve pip-audit's default internal cache path following OS conventions.
+    pip_audit_cache_dir = _get_internal_cache_path()
+
     # Respect pip's PIP_NO_CACHE_DIR environment setting.
     if use_pip and not os.getenv("PIP_NO_CACHE_DIR"):
         pip_cache_dir = _get_pip_cache() if _PIP_VERSION >= _MINIMUM_PIP_VERSION else None
@@ -68,11 +106,11 @@ def _get_cache_dir(custom_cache_dir: Path | None, *, use_pip: bool = True) -> Pa
         else:
             logger.warning(
                 f"pip {_PIP_VERSION} doesn't support the `cache dir` subcommand, "
-                f"using {_PIP_AUDIT_INTERNAL_CACHE} instead"
+                f"using {pip_audit_cache_dir} instead"
             )
-            return _PIP_AUDIT_INTERNAL_CACHE
+            return pip_audit_cache_dir
     else:
-        return _PIP_AUDIT_INTERNAL_CACHE
+        return pip_audit_cache_dir
 
 
 class _SafeFileCache(FileCache):
